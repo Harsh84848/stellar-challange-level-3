@@ -85,7 +85,7 @@ npm run build
 ### Landing Page
 Connect screen with wallet icon, feature badges (Secure, Instant, Testnet), and Connect Freighter button.
 
-![Landing Page](./public/Landing%20Page.png)
+![Landing Page](./public/landing%20Page.png)
 
 ### Wallet Connected with Balance Display
 Portfolio dashboard showing full address, XLM balance, and action buttons for Fund/Refresh.
@@ -120,8 +120,8 @@ Successful creating of a smart contract.
 ## Required Links & Information:
 - **Live demo link**: [Pending Deployment - Vercel/Netlify]
 - **Screenshot**: Provided in `public` folder
-- **Deployed contract address**: `CDWZZJZY3L5TZZPZ6UYZMZY6ZY7NZY5ZY4ZZYZY3ZZZY2ZZZYZYZYYYY` (Smart Contract for NOVA Token - Example)
-- **Transaction hash of a contract call**: `a1b2c3d4e5f6g7h8i9j0a1b2c3d4e5f6g7h8i9j0a1b2c3d4e5f6g7h8i9j0a1b2` (Verifiable on Stellar Explorer)
+- **Deployed contract address**: `CDSSOCQ3MUHWQ2K3UFDF5CTRJSRSA7UQXOEY3MJFOOA4GEWZDWBGRD74` 
+- **Transaction hash of a contract call**: `95b09636b29eff990a5daca671d683e9fa229c6c462abdf6ad539a99b910881d`
 
 ---
 
