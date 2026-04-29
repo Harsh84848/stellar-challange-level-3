@@ -13,7 +13,7 @@ A complete end-to-end decentralized feedback system built on the Stellar network
 ## 📸 Screenshots
 
 ### 1. Landing Page
-![Landing Page](./public/landing%20page.png)
+![Landing Page](./public/Landing%20page.png)
 
 ### 2. Wallet Connected
 ![Wallet Connected](./public/Wallet%20connected.png)
