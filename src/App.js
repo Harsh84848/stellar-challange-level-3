@@ -3,7 +3,7 @@ import { copyToClipboard } from 'copy-to-clipboard';
 import { QRCodeSVG } from 'qrcode.react';
 import { setAllowed, requestAccess, signTransaction, getPublicKey, isAllowed } from '@stellar/freighter-api';
 import * as StellarSdk from '@stellar/stellar-sdk';
-import { Copy, QrCode, LogOut, Send, Search, Users, CheckCircle, Clock, XCircle, AlertCircle, MessageSquare } from 'lucide-react';
+import { Copy, QrCode, LogOut, Send, Search, Users, CheckCircle, AlertCircle, MessageSquare } from 'lucide-react';
 import './index.css';
 import Loader from './components/Loader';
 
@@ -233,6 +233,7 @@ function App() {
     if (activeTab === 'global') {
       fetchGlobalFeedbacks();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
   const FeedbackCard = ({ fb }) => (
