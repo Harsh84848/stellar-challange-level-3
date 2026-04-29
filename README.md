@@ -34,7 +34,7 @@ A complete end-to-end decentralized feedback system built on the Stellar network
    ```
 2. Navigate to the project directory:
    ```bash
-   cd stellar-challange-level-2
+   cd stellar-challange-level-3
    ```
 3. Install dependencies:
    ```bash
