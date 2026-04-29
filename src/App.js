@@ -1,20 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { copyToClipboard } from 'copy-to-clipboard';
 import { QRCodeSVG } from 'qrcode.react';
 import { setAllowed, requestAccess, signTransaction, getPublicKey, isAllowed } from '@stellar/freighter-api';
 import * as StellarSdk from '@stellar/stellar-sdk';
-import { recordBatchPayments } from './lib/sorobanClient';
-import { Copy, QrCode, LogOut, Send, History, Plus, Trash2, CheckCircle, Clock, XCircle, AlertCircle } from 'lucide-react';
+import { Copy, QrCode, LogOut, Send, Search, Users, CheckCircle, Clock, XCircle, AlertCircle, MessageSquare } from 'lucide-react';
 import './index.css';
+import Loader from './components/Loader';
 
-import { getTransactions, saveTransaction } from './lib/transactionTracker';
-import SendToken from './components/SendToken';
-import TransactionStatus from './components/TransactionStatus';
-
-// Initialize Soroban RPC for tracking XLM transaction confirmation
 const horizonServerUrl = "https://horizon-testnet.stellar.org";
 const networkPassphrase = StellarSdk.Networks.TESTNET;
 const testnetServer = new StellarSdk.Horizon.Server(horizonServerUrl);
+
+const FEEDBACK_SINK = "GB6JLDD5HBGI6Y7XQDDMAIZYX4WCZZAY66LWHOS3EUW677DCQC6TVGYL";
 
 function App() {
   const [pubKey, setPubKey] = useState('');
@@ -22,92 +19,65 @@ function App() {
   const [isConnecting, setIsConnecting] = useState(false);
   
   // UI States
-  const [activeTab, setActiveTab] = useState('send');
+  const [activeTab, setActiveTab] = useState('submit');
   const [showQr, setShowQr] = useState(false);
   const [copied, setCopied] = useState(false);
   
-  // Send Form States
-  const [recipients, setRecipients] = useState([{ address: '', amount: '' }]);
-  const [memoText, setMemoText] = useState('');
+  // Submit Feedback States
+  const [feedbackText, setFeedbackText] = useState('');
   const [txError, setTxError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitStatus, setSubmitStatus] = useState('');
   
-  // History & Pending
-  const [transactions, setTransactions] = useState([]);
+  // Search States
+  const [searchAddress, setSearchAddress] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchCache, setSearchCache] = useState({});
   
-  // Load transactions from localStorage
+  // Global States
+  const [globalFeedbacks, setGlobalFeedbacks] = useState([]);
+  const [isFetchingGlobal, setIsFetchingGlobal] = useState(false);
+
+  // Load cache from localStorage
   useEffect(() => {
-    const saved = localStorage.getItem('stellar_tx_history');
-    if (saved) {
-      setTransactions(JSON.parse(saved));
+    const savedCache = localStorage.getItem('stellar_feedback_cache');
+    if (savedCache) {
+      setSearchCache(JSON.parse(savedCache));
     }
   }, []);
 
-  // Save transactions to localStorage when updated
   useEffect(() => {
-    if (transactions.length > 0) {
-      localStorage.setItem('stellar_tx_history', JSON.stringify(transactions));
+    localStorage.setItem('stellar_feedback_cache', JSON.stringify(searchCache));
+  }, [searchCache]);
+
+  const checkConnection = useCallback(async () => {
+    if (await isAllowed()) {
+      const address = await getPublicKey();
+      if (address) {
+        setPubKey(address);
+        fetchBalance(address);
+      }
     }
-  }, [transactions]);
-  
-  // Check if already connected
+  }, []);
+
   useEffect(() => {
-    const checkConnection = async () => {
-      if (await isAllowed()) {
-        const address = await getPublicKey();
-        if (address) {
-          setPubKey(address);
-          fetchBalance(address);
+    checkConnection();
+  }, [checkConnection]);
+
+  // Make sure the Feedback Sink account exists on Testnet
+  useEffect(() => {
+    const initSink = async () => {
+      try {
+        await testnetServer.loadAccount(FEEDBACK_SINK);
+      } catch (e) {
+        if (e.response && e.response.status === 404) {
+          fetch(`https://friendbot.stellar.org?addr=${FEEDBACK_SINK}`);
         }
       }
     };
-    checkConnection();
+    initSink();
   }, []);
-
-  // Poll pending transactions
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      const pendingTxs = transactions.filter(tx => tx.status === 'pending');
-      if (pendingTxs.length === 0) return;
-
-      const updatedTxs = [...transactions];
-      for (let tx of pendingTxs) {
-        try {
-          // Check Horizon server for native tx
-          await testnetServer.transactions().transaction(tx.hash).call();
-          // If it doesn't throw, it's successful on Horizon
-          const index = updatedTxs.findIndex(t => t.hash === tx.hash);
-          if (index !== -1) {
-             updatedTxs[index].status = 'soroban_recording';
-             setTransactions([...updatedTxs]);
-             
-             // Now trigger Soroban recording automatically
-             try {
-               await recordBatchPayments(pubKey, tx.recipients.map(r => ({ to: r.address, amount: r.amount })));
-               updatedTxs[index].status = 'success';
-             } catch (err) {
-               console.error("Soroban record failed", err);
-               updatedTxs[index].status = 'soroban_failed';
-               updatedTxs[index].error = err.message || "Failed to record on smart contract";
-             }
-             setTransactions([...updatedTxs]);
-          }
-        } catch (e) {
-          if (e.response && e.response.status === 404) {
-             // Still pending in Horizon, keep polling
-          } else {
-             const index = updatedTxs.findIndex(t => t.hash === tx.hash);
-             if (index !== -1) {
-                updatedTxs[index].status = 'failed';
-                updatedTxs[index].error = e.message;
-                setTransactions([...updatedTxs]);
-             }
-          }
-        }
-      }
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [transactions, pubKey]);
 
   const fetchBalance = async (address) => {
     try {
@@ -138,7 +108,6 @@ function App() {
   const handleDisconnect = () => {
     setPubKey('');
     setBalance('0');
-    // Freighter doesn't have an explicit disconnect, we just clear local state
   };
 
   const handleCopy = () => {
@@ -147,138 +116,156 @@ function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const addRecipient = () => {
-    if (recipients.length < 100) {
-      setRecipients([...recipients, { address: '', amount: '' }]);
-    }
-  };
-
-  const removeRecipient = (index) => {
-    const newR = [...recipients];
-    newR.splice(index, 1);
-    setRecipients(newR);
-  };
-
-  const updateRecipient = (index, field, value) => {
-    const newR = [...recipients];
-    newR[index][field] = value;
-    setRecipients(newR);
-  };
-
-  const validateForm = () => {
+  const handleSubmitFeedback = async () => {
     setTxError('');
-    let totalAmount = 0;
-    const addresses = new Set();
-    
-    for (let i = 0; i < recipients.length; i++) {
-        const { address, amount } = recipients[i];
-        if (!address || !StellarSdk.StrKey.isValidEd25519PublicKey(address)) {
-            setTxError(`Invalid address at row ${i + 1}`);
-            return false;
-        }
-        if (addresses.has(address)) {
-            setTxError(`Duplicate address found at row ${i + 1}`);
-            return false;
-        }
-        addresses.add(address);
-        
-        const floatAmt = parseFloat(amount);
-        if (isNaN(floatAmt) || floatAmt <= 0) {
-            setTxError(`Invalid amount at row ${i + 1}`);
-            return false;
-        }
-        totalAmount += floatAmt;
+    setSubmitStatus('');
+    if (!feedbackText || feedbackText.length > 28) {
+      setTxError("Feedback must be between 1 and 28 characters.");
+      return;
     }
     
-    if (totalAmount + 0.01 > parseFloat(balance)) {
-        setTxError("Insufficient XLM balance for this batch transaction.");
-        return false;
-    }
-    
-    if (memoText.length > 28) {
-        setTxError("Memo text must be 28 characters or fewer.");
-        return false;
-    }
-    
-    return true;
-  };
-
-  const handleSend = async () => {
-    if (!validateForm()) return;
     setIsSubmitting(true);
     
     try {
       const account = await testnetServer.loadAccount(pubKey);
       let builder = new StellarSdk.TransactionBuilder(account, { fee: StellarSdk.BASE_FEE, networkPassphrase });
       
-      recipients.forEach((rec) => {
-         builder.addOperation(StellarSdk.Operation.payment({
-            destination: rec.address,
-            asset: StellarSdk.Asset.native(),
-            amount: rec.amount.toString()
-         }));
-      });
+      builder.addOperation(StellarSdk.Operation.payment({
+        destination: FEEDBACK_SINK,
+        asset: StellarSdk.Asset.native(),
+        amount: "0.0000001"
+      }));
       
-      if (memoText) {
-          builder.addMemo(StellarSdk.Memo.text(memoText));
-      }
+      builder.addMemo(StellarSdk.Memo.text(feedbackText));
       
       const tx = builder.setTimeout(300).build();
       
-      // Sign with Freighter
+      setSubmitStatus('Awaiting wallet signature...');
       const signedTxXdr = await signTransaction(tx.toXDR(), { network: 'TESTNET' });
       const signedTx = StellarSdk.TransactionBuilder.fromXDR(signedTxXdr, networkPassphrase);
       
-      // Submit to Horizon
+      setSubmitStatus('Submitting to Stellar network...');
       const response = await testnetServer.submitTransaction(signedTx);
       
-      // Integration Point: Connect to existing transactionTracker
-      const saved = saveTransaction({
-         hash: response.hash,
-         date: new Date().toISOString(),
-         type: 'Batch Payment',
-         memo: memoText,
-         recipients: [...recipients],
-         status: 'pending' // pending horizon confirmation and soroban logging
-      });
+      setSubmitStatus(`Success! Hash: ${response.hash}`);
+      setFeedbackText('');
       
-      setTransactions(saved);
-      
-      // Reset form
-      setRecipients([{ address: '', amount: '' }]);
-      setMemoText('');
-      setActiveTab('history');
+      // Clear global cache so it refreshes
+      fetchGlobalFeedbacks(true);
       
     } catch (e) {
       console.error(e);
       let errorMsg = e.message || "Transaction submission failed";
-      if (e.response && e.response.data && e.response.data.extras && e.response.data.extras.result_codes) {
+      if (e.response && e.response.data && e.response.data.extras) {
          errorMsg = "Stellar Error: " + JSON.stringify(e.response.data.extras.result_codes);
-      } else if (e.response && e.response.data && e.response.data.detail) {
-         errorMsg = e.response.data.detail;
       }
       setTxError(errorMsg);
     } finally {
       setIsSubmitting(false);
+      setTimeout(() => setSubmitStatus(''), 5000);
     }
   };
 
+  const parseFeedbacksFromTxs = (txs) => {
+    return txs.records
+      .filter(tx => tx.memo_type === 'text' && tx.memo)
+      .map(tx => ({
+        id: tx.id,
+        hash: tx.hash,
+        sender: tx.source_account,
+        feedback: tx.memo,
+        date: tx.created_at
+      }));
+  };
 
+  const handleSearch = async () => {
+    if (!searchAddress || !StellarSdk.StrKey.isValidEd25519PublicKey(searchAddress)) {
+      alert("Please enter a valid Stellar address.");
+      return;
+    }
+
+    if (searchCache[searchAddress]) {
+      setSearchResults(searchCache[searchAddress]);
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      // Find transactions for this account where destination is FEEDBACK_SINK
+      // To simplify, we get the account's transactions and filter for the feedback memo
+      const txs = await testnetServer.transactions().forAccount(searchAddress).limit(100).order('desc').call();
+      
+      // We assume any text memo sent by this account in this dApp is feedback
+      const feedbacks = parseFeedbacksFromTxs(txs).filter(f => f.sender === searchAddress);
+      
+      setSearchResults(feedbacks);
+      
+      setSearchCache(prev => ({
+        ...prev,
+        [searchAddress]: feedbacks
+      }));
+    } catch (error) {
+      console.error(error);
+      alert("Failed to fetch feedback for this address.");
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const fetchGlobalFeedbacks = async (force = false) => {
+    if (globalFeedbacks.length > 0 && !force) return;
+    setIsFetchingGlobal(true);
+    try {
+      const txs = await testnetServer.transactions().forAccount(FEEDBACK_SINK).limit(50).order('desc').call();
+      const feedbacks = parseFeedbacksFromTxs(txs);
+      
+      // Remove duplicates from the same sender if desired, or keep all
+      // For this global list, let's keep all recent ones
+      setGlobalFeedbacks(feedbacks);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsFetchingGlobal(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'global') {
+      fetchGlobalFeedbacks();
+    }
+  }, [activeTab]);
+
+  const FeedbackCard = ({ fb }) => (
+    <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700/50 mb-4 transition hover:bg-gray-800">
+      <div className="flex justify-between items-start mb-2">
+        <span className="font-mono text-sm text-blue-400">
+          {fb.sender.substring(0, 8)}...{fb.sender.slice(-8)}
+        </span>
+        <span className="text-xs text-gray-500">{new Date(fb.date).toLocaleString()}</span>
+      </div>
+      <p className="text-gray-200 font-medium text-lg">&quot;{fb.feedback}&quot;</p>
+      <div className="mt-3 text-xs">
+        <a href={`https://stellar.expert/explorer/testnet/tx/${fb.hash}`} target="_blank" rel="noreferrer" className="text-gray-500 hover:text-blue-400 flex items-center">
+          <CheckCircle className="w-3 h-3 mr-1" /> Verified on Chain
+        </a>
+      </div>
+    </div>
+  );
 
   return (
-    <div className="min-h-screen relative overflow-hidden">
+    <div className="min-h-screen relative overflow-hidden text-white bg-[#0B101E]">
       {/* Background gradients */}
-      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-blue-600/20 blur-[120px] pointer-events-none"></div>
-      <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-purple-600/20 blur-[120px] pointer-events-none"></div>
+      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-blue-600/10 blur-[120px] pointer-events-none"></div>
+      <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-indigo-600/10 blur-[120px] pointer-events-none"></div>
 
       <div className="max-w-5xl mx-auto px-4 py-8 relative z-10">
-        <header className="flex justify-between items-center mb-12">
+        <header className="flex flex-col sm:flex-row justify-between items-center mb-12 gap-4">
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center transform rotate-12 shadow-lg">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+            <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg">
+                <MessageSquare className="w-6 h-6 text-white" />
             </div>
             <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
-              Stellar Batch Pay
+              Stellar Feedback
             </h1>
           </div>
           
@@ -294,10 +281,10 @@ function App() {
 
         {!pubKey ? (
           <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
-            <h2 className="text-4xl font-extrabold mb-6">Mass Distribution on Stellar</h2>
-            <p className="text-gray-400 mb-8 max-w-xl text-lg">Send XLM to multiple recipients instantly with one transaction, and automatically record the receipts on our Soroban smart contract.</p>
+            <h2 className="text-4xl font-extrabold mb-6">Decentralized Feedback System</h2>
+            <p className="text-gray-400 mb-8 max-w-xl text-lg">Leave immutable feedback on the Stellar blockchain. View what others have shared globally, and search by specific addresses.</p>
             <button 
-              className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-4 rounded-full font-bold text-lg shadow-[0_0_20px_rgba(37,99,235,0.4)] transition-all transform hover:scale-105 flex items-center"
+              className="bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-4 rounded-full font-bold text-lg shadow-[0_0_20px_rgba(79,70,229,0.4)] transition-all transform hover:scale-105 flex items-center"
               onClick={handleConnect} disabled={isConnecting}
             >
               {isConnecting ? 'Connecting...' : 'Connect Freighter Wallet'}
@@ -308,13 +295,13 @@ function App() {
             
             {/* Sidebar Overview */}
             <div className="lg:col-span-1 space-y-6">
-               <div className="glass-panel p-6">
+               <div className="bg-gray-900/40 backdrop-blur-md rounded-2xl border border-gray-800 p-6 shadow-xl">
                   <h3 className="text-gray-400 text-sm font-semibold mb-1 uppercase tracking-wider">Account Balance</h3>
                   <div className="text-4xl font-bold mb-6 flex items-end">
-                      {parseFloat(balance).toFixed(2)} <span className="text-xl text-blue-400 ml-2 mb-1">XLM</span>
+                      {parseFloat(balance).toFixed(2)} <span className="text-xl text-indigo-400 ml-2 mb-1">XLM</span>
                   </div>
                   
-                  <div className="bg-gray-900/50 rounded-lg p-4 border border-gray-700/50 mb-4">
+                  <div className="bg-black/30 rounded-lg p-4 border border-gray-800 mb-4">
                      <p className="text-xs text-gray-500 mb-1">Connected Address</p>
                      <div className="flex items-center justify-between font-mono text-sm">
                         <span className="truncate mr-2 text-gray-300">{pubKey.substring(0, 8)}...{pubKey.slice(-8)}</span>
@@ -337,7 +324,7 @@ function App() {
 
                   <button 
                      onClick={() => window.open(`https://friendbot.stellar.org/?addr=${pubKey}`, '_blank')}
-                     className="w-full text-center py-2 text-sm text-blue-400 hover:text-blue-300 border border-blue-500/30 rounded-lg hover:bg-blue-500/10 transition"
+                     className="w-full text-center py-2 text-sm text-indigo-400 hover:text-indigo-300 border border-indigo-500/30 rounded-lg hover:bg-indigo-500/10 transition"
                   >
                      Fund from Friendbot
                   </button>
@@ -346,98 +333,50 @@ function App() {
 
             {/* Main Action Area */}
             <div className="lg:col-span-2">
-               <div className="glass-panel overflow-hidden">
-                  <div className="flex border-b border-gray-700/50">
+               <div className="bg-gray-900/40 backdrop-blur-md rounded-2xl border border-gray-800 shadow-xl overflow-hidden">
+                  <div className="flex border-b border-gray-800">
                      <button 
-                        className={`flex-1 py-4 text-center font-medium transition-colors ${activeTab === 'send' ? 'bg-blue-600/10 text-blue-400 border-b-2 border-blue-500' : 'text-gray-400 hover:bg-gray-800'}`}
-                        onClick={() => setActiveTab('send')}
+                        className={`flex-1 py-4 text-center font-medium transition-colors ${activeTab === 'submit' ? 'bg-indigo-600/10 text-indigo-400 border-b-2 border-indigo-500' : 'text-gray-400 hover:bg-gray-800/50'}`}
+                        onClick={() => setActiveTab('submit')}
                      >
                         <Send className="w-4 h-4 inline-block mr-2 -mt-1" />
-                        Send Native XLM
+                        Submit
                      </button>
                      <button 
-                        className={`flex-1 py-4 text-center font-medium transition-colors ${activeTab === 'send_token' ? 'bg-green-600/10 text-green-400 border-b-2 border-green-500' : 'text-gray-400 hover:bg-gray-800'}`}
-                        onClick={() => setActiveTab('send_token')}
+                        className={`flex-1 py-4 text-center font-medium transition-colors ${activeTab === 'search' ? 'bg-blue-600/10 text-blue-400 border-b-2 border-blue-500' : 'text-gray-400 hover:bg-gray-800/50'}`}
+                        onClick={() => setActiveTab('search')}
                      >
-                        <Plus className="w-4 h-4 inline-block mr-2 -mt-1" />
-                        Send Tokens
+                        <Search className="w-4 h-4 inline-block mr-2 -mt-1" />
+                        Search
                      </button>
                      <button 
-                        className={`flex-1 py-4 text-center font-medium transition-colors ${activeTab === 'history' ? 'bg-purple-600/10 text-purple-400 border-b-2 border-purple-500' : 'text-gray-400 hover:bg-gray-800'}`}
-                        onClick={() => {
-                            setActiveTab('history');
-                            const saved = getTransactions();
-                            setTransactions(saved);
-                        }}
+                        className={`flex-1 py-4 text-center font-medium transition-colors ${activeTab === 'global' ? 'bg-purple-600/10 text-purple-400 border-b-2 border-purple-500' : 'text-gray-400 hover:bg-gray-800/50'}`}
+                        onClick={() => setActiveTab('global')}
                      >
-                        <History className="w-4 h-4 inline-block mr-2 -mt-1" />
-                        Transaction History
+                        <Users className="w-4 h-4 inline-block mr-2 -mt-1" />
+                        Global
                      </button>
                   </div>
 
                   <div className="p-6">
-                     {activeTab === 'send_token' && (
-                         <SendToken 
-                             publicKey={pubKey} 
-                             onBack={() => setActiveTab('history')} 
-                             tokenContractId="CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC" 
-                         />
-                     )}
-                     {activeTab === 'send' && (
+                     {activeTab === 'submit' && (
                         <div className="space-y-6">
-                            <div className="flex justify-between items-center bg-blue-900/20 p-4 rounded-lg border border-blue-800/50">
-                                <span className="text-blue-200 text-sm">Send to 1-100 recipients simultaneously. Payments will be logged to Soroban automatically.</span>
-                            </div>
-
-                            {recipients.map((rec, idx) => (
-                                <div key={idx} className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
-                                    <div className="flex-1 w-full">
-                                        <input 
-                                          type="text" 
-                                          placeholder="Stellar Public Key (G...)" 
-                                          className="input-field font-mono text-sm"
-                                          value={rec.address}
-                                          onChange={(e) => updateRecipient(idx, 'address', e.target.value)}
-                                        />
-                                    </div>
-                                    <div className="w-full sm:w-32">
-                                        <input 
-                                          type="number" 
-                                          step="0.01"
-                                          placeholder="Amount" 
-                                          className="input-field text-right"
-                                          value={rec.amount}
-                                          onChange={(e) => updateRecipient(idx, 'amount', e.target.value)}
-                                        />
-                                    </div>
-                                    <button 
-                                        onClick={() => removeRecipient(idx)} 
-                                        disabled={recipients.length === 1}
-                                        className="p-3 text-gray-500 hover:text-red-400 disabled:opacity-30 transition"
-                                    >
-                                        <Trash2 className="w-5 h-5" />
-                                    </button>
-                                </div>
-                            ))}
-
-                            <div className="flex justify-between">
-                                <button onClick={addRecipient} className="flex items-center text-sm text-blue-400 hover:text-blue-300 font-medium">
-                                    <Plus className="w-4 h-4 mr-1" /> Add Recipient
-                                </button>
-                                <div className="text-sm text-gray-400 font-mono">
-                                    Total: {recipients.reduce((acc, r) => acc + (parseFloat(r.amount) || 0), 0).toFixed(2)} XLM
-                                </div>
+                            <div className="flex justify-between items-center bg-indigo-900/20 p-4 rounded-lg border border-indigo-800/50">
+                                <span className="text-indigo-200 text-sm">Submit your message on the Stellar blockchain. It will be permanently recorded.</span>
                             </div>
 
                             <div>
-                                <label className="block text-sm text-gray-400 mb-2">Optional Memo (Max 28 chars)</label>
-                                <input 
-                                  type="text" 
-                                  className="input-field" 
-                                  value={memoText} 
-                                  onChange={(e) => setMemoText(e.target.value)}
+                                <label className="block text-sm text-gray-400 mb-2">Your Feedback (Max 28 chars)</label>
+                                <textarea 
+                                  className="w-full bg-black/40 border border-gray-700 rounded-lg p-4 text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 resize-none h-24"
+                                  placeholder="E.g., Great dApp experience!"
+                                  value={feedbackText} 
+                                  onChange={(e) => setFeedbackText(e.target.value)}
                                   maxLength={28}
                                 />
+                                <div className="text-right text-xs text-gray-500 mt-1">
+                                    {feedbackText.length}/28
+                                </div>
                             </div>
 
                             {txError && (
@@ -447,21 +386,73 @@ function App() {
                                 </div>
                             )}
 
+                            {submitStatus && !txError && (
+                                <div className="p-4 bg-blue-900/30 border border-blue-500/50 rounded-lg flex items-center text-blue-200">
+                                    {isSubmitting && <Loader />}
+                                    <span className={isSubmitting ? "ml-3" : ""}>{submitStatus}</span>
+                                </div>
+                            )}
+
                             <button 
-                               className={`w-full py-4 rounded-xl font-bold text-lg shadow-lg transition-all flex justify-center items-center ${isSubmitting ? 'bg-blue-800 text-gray-300 cursor-wait' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
-                               onClick={handleSend}
-                               disabled={isSubmitting}
+                               className={`w-full py-4 rounded-xl font-bold text-lg shadow-lg transition-all flex justify-center items-center ${isSubmitting ? 'bg-indigo-800 text-gray-300 cursor-wait' : 'bg-indigo-600 hover:bg-indigo-500 text-white'}`}
+                               onClick={handleSubmitFeedback}
+                               disabled={isSubmitting || !feedbackText}
                             >
-                               {isSubmitting ? (
-                                   <><div className="animate-spin rounded-full h-5 w-5 border-t-2 border-white border-r-2 mr-3"></div> Sending...</>
-                               ) : 'Sign & Submit Batch'}
+                               {isSubmitting ? 'Processing...' : 'Record Feedback on Chain'}
                             </button>
                         </div>
                      )}
 
-                     {activeTab === 'history' && (
-                        <div>
-                            <TransactionStatus transactions={transactions} />
+                     {activeTab === 'search' && (
+                        <div className="space-y-6">
+                            <div className="flex gap-3">
+                                <input 
+                                  type="text" 
+                                  placeholder="Enter Stellar Public Key (G...)" 
+                                  className="flex-1 bg-black/40 border border-gray-700 rounded-lg p-3 text-white focus:outline-none focus:border-blue-500 font-mono text-sm"
+                                  value={searchAddress}
+                                  onChange={(e) => setSearchAddress(e.target.value)}
+                                />
+                                <button 
+                                  onClick={handleSearch}
+                                  disabled={isSearching || !searchAddress}
+                                  className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-lg font-semibold transition disabled:opacity-50"
+                                >
+                                  {isSearching ? <Loader /> : 'Search'}
+                                </button>
+                            </div>
+
+                            <div className="mt-6 max-h-[400px] overflow-y-auto pr-2">
+                                {searchResults.length === 0 && !isSearching && searchAddress && (
+                                    <div className="text-center py-10 text-gray-500">
+                                        No feedback found for this address.
+                                    </div>
+                                )}
+                                {searchResults.map(fb => <FeedbackCard key={fb.id} fb={fb} />)}
+                            </div>
+                        </div>
+                     )}
+
+                     {activeTab === 'global' && (
+                        <div className="space-y-4">
+                            <div className="flex justify-between items-center mb-4">
+                                <h3 className="text-lg font-semibold text-gray-200">Recent Global Contributors</h3>
+                                <button onClick={() => fetchGlobalFeedbacks(true)} className="text-xs text-purple-400 hover:text-purple-300">
+                                    Refresh
+                                </button>
+                            </div>
+                            
+                            {isFetchingGlobal ? (
+                                <div className="py-10 flex justify-center"><Loader /></div>
+                            ) : (
+                                <div className="max-h-[500px] overflow-y-auto pr-2">
+                                    {globalFeedbacks.length === 0 ? (
+                                        <div className="text-center py-10 text-gray-500">No global feedback yet.</div>
+                                    ) : (
+                                        globalFeedbacks.map(fb => <FeedbackCard key={fb.id} fb={fb} />)
+                                    )}
+                                </div>
+                            )}
                         </div>
                      )}
                   </div>
