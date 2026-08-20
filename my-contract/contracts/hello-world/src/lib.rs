@@ -1,68 +1,63 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, Env, Symbol, Vec, Map};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Vec};
 
-pub struct PaymentRecorder;
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Credential {
+    pub org: Address,
+    pub score_value: u32,
+    pub description: String,
+}
 
 #[contract]
-pub struct PaymentRecorderContract;
+pub struct TrustMeshContract;
 
 #[contractimpl]
-impl PaymentRecorderContract {
-    /// Record a payment transaction
-    pub fn record_payment(
+impl TrustMeshContract {
+    pub fn add_credential(
         env: Env,
-        from: soroban_sdk::Address,
-        to: soroban_sdk::Address,
-        amount: i32,
-        timestamp: i32,
-    ) -> bool {
-        // Get or create the payments vector
-        let key = Symbol::new(&env, "payments");
-        let mut payments: Vec<Map<Symbol, soroban_sdk::Val>> = env
+        user: Address,
+        org: Address,
+        score_value: u32,
+        description: String,
+    ) -> u32 {
+        org.require_auth();
+
+        let mut credentials: Vec<Credential> = env
             .storage()
             .persistent()
-            .get(&key)
+            .get(&user)
             .unwrap_or_else(|| Vec::new(&env));
 
-        // Create payment record
-        let mut payment = Map::new(&env);
-        payment.set(Symbol::new(&env, "from"), from.to_val());
-        payment.set(Symbol::new(&env, "to"), to.to_val());
-        payment.set(Symbol::new(&env, "amount"), amount.into());
-        payment.set(Symbol::new(&env, "timestamp"), timestamp.into());
+        credentials.push_back(Credential {
+            org: org.clone(),
+            score_value,
+            description,
+        });
 
-        payments.push_back(payment);
+        env.storage().persistent().set(&user, &credentials);
 
-        // Store updated payments
-        env.storage().persistent().set(&key, &payments);
-
-        true
+        Self::get_score(env.clone(), user)
     }
 
-    /// Get all recorded payments
-    pub fn get_payments(env: Env) -> Vec<Map<Symbol, soroban_sdk::Val>> {
-        let key = Symbol::new(&env, "payments");
-        env.storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or_else(|| Vec::new(&env))
-    }
-
-    /// Get payment count
-    pub fn get_payment_count(env: Env) -> u32 {
-        let key = Symbol::new(&env, "payments");
-        let payments: Vec<Map<Symbol, soroban_sdk::Val>> = env
+    pub fn get_score(env: Env, user: Address) -> u32 {
+        let credentials: Vec<Credential> = env
             .storage()
             .persistent()
-            .get(&key)
+            .get(&user)
             .unwrap_or_else(|| Vec::new(&env));
-        payments.len() as u32
+
+        let mut total_score = 0;
+        for cred in credentials.iter() {
+            total_score += cred.score_value;
+        }
+        total_score
     }
 
-    /// Clear all payments (admin only)
-    pub fn clear_payments(env: Env) -> bool {
-        let key = Symbol::new(&env, "payments");
-        env.storage().persistent().remove(&key);
-        true
+    pub fn is_eligible_for_loan(env: Env, user: Address, required_score: u32) -> bool {
+        let current_score = Self::get_score(env.clone(), user);
+        current_score >= required_score
     }
 }
+
+mod test;

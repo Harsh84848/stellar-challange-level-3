@@ -1,62 +1,39 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { copyToClipboard } from 'copy-to-clipboard';
-import { QRCodeSVG } from 'qrcode.react';
 import { setAllowed, requestAccess, signTransaction, getPublicKey, isAllowed } from '@stellar/freighter-api';
 import * as StellarSdk from '@stellar/stellar-sdk';
-import { Copy, QrCode, LogOut, Send, Search, Users, CheckCircle, AlertCircle, MessageSquare } from 'lucide-react';
+import { Shield, Award, CheckCircle, TrendingUp, AlertCircle, Building, Wallet, LogOut, Loader2 } from 'lucide-react';
 import './index.css';
-import Loader from './components/Loader';
 
+// Mock Contract ID for now (will update after deployment)
+const CONTRACT_ID = "CA...mock_contract_id...TODO"; 
 const horizonServerUrl = "https://horizon-testnet.stellar.org";
-const networkPassphrase = StellarSdk.Networks.TESTNET;
 const testnetServer = new StellarSdk.Horizon.Server(horizonServerUrl);
-
-const FEEDBACK_SINK = "GB6JLDD5HBGI6Y7XQDDMAIZYX4WCZZAY66LWHOS3EUW677DCQC6TVGYL";
 
 function App() {
   const [pubKey, setPubKey] = useState('');
-  const [balance, setBalance] = useState('0');
   const [isConnecting, setIsConnecting] = useState(false);
-  
-  // UI States
-  const [activeTab, setActiveTab] = useState('submit');
-  const [showQr, setShowQr] = useState(false);
-  const [copied, setCopied] = useState(false);
-  
-  // Submit Feedback States
-  const [feedbackText, setFeedbackText] = useState('');
-  const [txError, setTxError] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submitStatus, setSubmitStatus] = useState('');
-  
-  // Search States
-  const [searchAddress, setSearchAddress] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [searchCache, setSearchCache] = useState({});
-  
-  // Global States
-  const [globalFeedbacks, setGlobalFeedbacks] = useState([]);
-  const [isFetchingGlobal, setIsFetchingGlobal] = useState(false);
+  const [activeTab, setActiveTab] = useState('user'); // 'user' or 'org'
 
-  // Load cache from localStorage
-  useEffect(() => {
-    const savedCache = localStorage.getItem('stellar_feedback_cache');
-    if (savedCache) {
-      setSearchCache(JSON.parse(savedCache));
-    }
-  }, []);
+  // User State
+  const [trustScore, setTrustScore] = useState(0);
+  const [credentials, setCredentials] = useState([]);
+  const [loanAmount, setLoanAmount] = useState('100');
+  const [isEligible, setIsEligible] = useState(null);
+  const [isFetchingData, setIsFetchingData] = useState(false);
 
-  useEffect(() => {
-    localStorage.setItem('stellar_feedback_cache', JSON.stringify(searchCache));
-  }, [searchCache]);
+  // Org State
+  const [recipientAddress, setRecipientAddress] = useState('');
+  const [scoreValue, setScoreValue] = useState('10');
+  const [credentialDesc, setCredentialDesc] = useState('');
+  const [isIssuing, setIsIssuing] = useState(false);
+  const [issueStatus, setIssueStatus] = useState('');
 
   const checkConnection = useCallback(async () => {
     if (await isAllowed()) {
       const address = await getPublicKey();
       if (address) {
         setPubKey(address);
-        fetchBalance(address);
+        fetchUserData(address);
       }
     }
   }, []);
@@ -65,27 +42,20 @@ function App() {
     checkConnection();
   }, [checkConnection]);
 
-  // Make sure the Feedback Sink account exists on Testnet
-  useEffect(() => {
-    const initSink = async () => {
-      try {
-        await testnetServer.loadAccount(FEEDBACK_SINK);
-      } catch (e) {
-        if (e.response && e.response.status === 404) {
-          fetch(`https://friendbot.stellar.org?addr=${FEEDBACK_SINK}`);
-        }
-      }
-    };
-    initSink();
-  }, []);
-
-  const fetchBalance = async (address) => {
+  // Mock Fetching User Data (Since contract invocation from frontend requires soroban-client setup)
+  // For the MVP frontend structure, we will simulate the fetch if real contract isn't linked yet.
+  const fetchUserData = async (address) => {
+    setIsFetchingData(true);
     try {
-      const account = await testnetServer.loadAccount(address);
-      const xlmBalance = account.balances.find((b) => b.asset_type === 'native');
-      if (xlmBalance) setBalance(xlmBalance.balance);
+      // TODO: Replace with real Soroban get_score call
+      // Simulate network delay
+      await new Promise(resolve => setTimeout(resolve, 800));
+      setTrustScore(0); 
+      setCredentials([]);
     } catch (e) {
-      console.error('Error fetching balance:', e);
+      console.error(e);
+    } finally {
+      setIsFetchingData(false);
     }
   };
 
@@ -96,7 +66,7 @@ function App() {
       const access = await requestAccess();
       if (access) {
         setPubKey(access);
-        fetchBalance(access);
+        fetchUserData(access);
       }
     } catch (e) {
       alert("Error connecting Freighter: " + e.message);
@@ -107,361 +77,312 @@ function App() {
 
   const handleDisconnect = () => {
     setPubKey('');
-    setBalance('0');
+    setTrustScore(0);
+    setCredentials([]);
   };
 
-  const handleCopy = () => {
-    copyToClipboard(pubKey);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const checkLoanEligibility = () => {
+    // Required score logic (mock): Loan > 500 requires score 50
+    const required = parseInt(loanAmount) > 500 ? 50 : 20;
+    setIsEligible(trustScore >= required);
   };
 
-  const handleSubmitFeedback = async () => {
-    setTxError('');
-    setSubmitStatus('');
-    if (!feedbackText || feedbackText.length > 28) {
-      setTxError("Feedback must be between 1 and 28 characters.");
-      return;
-    }
-    
-    setIsSubmitting(true);
-    
+  const handleIssueCredential = async () => {
+    if (!recipientAddress || !scoreValue || !credentialDesc) return;
+    setIsIssuing(true);
+    setIssueStatus('Initiating transaction...');
     try {
-      const account = await testnetServer.loadAccount(pubKey);
-      let builder = new StellarSdk.TransactionBuilder(account, { fee: StellarSdk.BASE_FEE, networkPassphrase });
+      // TODO: Replace with real Soroban contract invocation using @stellar/freighter-api
+      // For now, simulate the issuance flow
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      setIssueStatus('Awaiting wallet signature...');
+      await new Promise(resolve => setTimeout(resolve, 1500));
       
-      builder.addOperation(StellarSdk.Operation.payment({
-        destination: FEEDBACK_SINK,
-        asset: StellarSdk.Asset.native(),
-        amount: "0.0000001"
-      }));
+      setIssueStatus('Credential successfully issued on Stellar!');
+      setRecipientAddress('');
+      setCredentialDesc('');
       
-      builder.addMemo(StellarSdk.Memo.text(feedbackText));
-      
-      const tx = builder.setTimeout(300).build();
-      
-      setSubmitStatus('Awaiting wallet signature...');
-      const signedTxXdr = await signTransaction(tx.toXDR(), { network: 'TESTNET' });
-      const signedTx = StellarSdk.TransactionBuilder.fromXDR(signedTxXdr, networkPassphrase);
-      
-      setSubmitStatus('Submitting to Stellar network...');
-      const response = await testnetServer.submitTransaction(signedTx);
-      
-      setSubmitStatus(`Success! Hash: ${response.hash}`);
-      setFeedbackText('');
-      
-      // Clear global cache so it refreshes
-      fetchGlobalFeedbacks(true);
-      
+      // Update local state if issuing to self (for demo purposes)
+      if (recipientAddress === pubKey) {
+        setTrustScore(prev => prev + parseInt(scoreValue));
+        setCredentials(prev => [...prev, {
+            org: pubKey,
+            score_value: parseInt(scoreValue),
+            description: credentialDesc,
+            date: new Date().toLocaleDateString()
+        }]);
+      }
     } catch (e) {
       console.error(e);
-      let errorMsg = e.message || "Transaction submission failed";
-      if (e.response && e.response.data && e.response.data.extras) {
-         errorMsg = "Stellar Error: " + JSON.stringify(e.response.data.extras.result_codes);
-      }
-      setTxError(errorMsg);
+      setIssueStatus('Error issuing credential');
     } finally {
-      setIsSubmitting(false);
-      setTimeout(() => setSubmitStatus(''), 5000);
+      setIsIssuing(false);
+      setTimeout(() => setIssueStatus(''), 5000);
     }
   };
-
-  const parseFeedbacksFromTxs = (txs) => {
-    return txs.records
-      .filter(tx => tx.memo_type === 'text' && tx.memo)
-      .map(tx => ({
-        id: tx.id,
-        hash: tx.hash,
-        sender: tx.source_account,
-        feedback: tx.memo,
-        date: tx.created_at
-      }));
-  };
-
-  const handleSearch = async () => {
-    if (!searchAddress || !StellarSdk.StrKey.isValidEd25519PublicKey(searchAddress)) {
-      alert("Please enter a valid Stellar address.");
-      return;
-    }
-
-    if (searchCache[searchAddress]) {
-      setSearchResults(searchCache[searchAddress]);
-      return;
-    }
-
-    setIsSearching(true);
-    try {
-      // Find transactions for this account where destination is FEEDBACK_SINK
-      // To simplify, we get the account's transactions and filter for the feedback memo
-      const txs = await testnetServer.transactions().forAccount(searchAddress).limit(100).order('desc').call();
-      
-      // We assume any text memo sent by this account in this dApp is feedback
-      const feedbacks = parseFeedbacksFromTxs(txs).filter(f => f.sender === searchAddress);
-      
-      setSearchResults(feedbacks);
-      
-      setSearchCache(prev => ({
-        ...prev,
-        [searchAddress]: feedbacks
-      }));
-    } catch (error) {
-      console.error(error);
-      alert("Failed to fetch feedback for this address.");
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
-  const fetchGlobalFeedbacks = async (force = false) => {
-    if (globalFeedbacks.length > 0 && !force) return;
-    setIsFetchingGlobal(true);
-    try {
-      const txs = await testnetServer.transactions().forAccount(FEEDBACK_SINK).limit(50).order('desc').call();
-      const feedbacks = parseFeedbacksFromTxs(txs);
-      
-      // Remove duplicates from the same sender if desired, or keep all
-      // For this global list, let's keep all recent ones
-      setGlobalFeedbacks(feedbacks);
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setIsFetchingGlobal(false);
-    }
-  };
-
-  useEffect(() => {
-    if (activeTab === 'global') {
-      fetchGlobalFeedbacks();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
-
-  const FeedbackCard = ({ fb }) => (
-    <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700/50 mb-4 transition hover:bg-gray-800">
-      <div className="flex justify-between items-start mb-2">
-        <span className="font-mono text-sm text-blue-400">
-          {fb.sender.substring(0, 8)}...{fb.sender.slice(-8)}
-        </span>
-        <span className="text-xs text-gray-500">{new Date(fb.date).toLocaleString()}</span>
-      </div>
-      <p className="text-gray-200 font-medium text-lg">&quot;{fb.feedback}&quot;</p>
-      <div className="mt-3 text-xs">
-        <a href={`https://stellar.expert/explorer/testnet/tx/${fb.hash}`} target="_blank" rel="noreferrer" className="text-gray-500 hover:text-blue-400 flex items-center">
-          <CheckCircle className="w-3 h-3 mr-1" /> Verified on Chain
-        </a>
-      </div>
-    </div>
-  );
 
   return (
-    <div className="min-h-screen relative overflow-hidden text-white bg-[#0B101E]">
-      {/* Background gradients */}
-      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-blue-600/10 blur-[120px] pointer-events-none"></div>
-      <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-indigo-600/10 blur-[120px] pointer-events-none"></div>
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-indigo-500/30">
+      {/* Premium Background Elements */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] rounded-full bg-indigo-600/10 blur-[120px]" />
+        <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] rounded-full bg-emerald-600/10 blur-[120px]" />
+      </div>
 
-      <div className="max-w-5xl mx-auto px-4 py-8 relative z-10">
-        <header className="flex flex-col sm:flex-row justify-between items-center mb-12 gap-4">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg">
-                <MessageSquare className="w-6 h-6 text-white" />
+      <nav className="relative z-10 border-b border-slate-800/50 bg-slate-950/50 backdrop-blur-xl">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+              <Shield className="w-6 h-6 text-white" />
             </div>
-            <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
-              Stellar Feedback
-            </h1>
+            <span className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
+              TrustMesh
+            </span>
           </div>
           
-          <div className="flex items-center space-x-4">
-             <span className="px-3 py-1 rounded-full bg-blue-500/20 text-blue-300 text-xs font-semibold tracking-wider border border-blue-500/30">TESTNET</span>
-             {pubKey && (
-                <button onClick={handleDisconnect} className="bg-gray-800 hover:bg-gray-700 text-gray-300 px-4 py-2 rounded-lg text-sm border border-gray-700 transition flex items-center gap-2">
-                    Disconnect <LogOut className="w-4 h-4" />
+          <div className="flex items-center gap-4">
+             <span className="hidden sm:inline-block px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-semibold tracking-wider border border-emerald-500/20">
+               STELLAR TESTNET
+             </span>
+             {pubKey ? (
+                <button 
+                  onClick={handleDisconnect} 
+                  className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-xl text-sm font-medium transition-all"
+                >
+                  <span className="hidden sm:inline">{pubKey.substring(0, 6)}...{pubKey.slice(-4)}</span>
+                  <LogOut className="w-4 h-4" />
+                </button>
+             ) : (
+                <button 
+                  onClick={handleConnect}
+                  disabled={isConnecting}
+                  className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow-lg shadow-indigo-500/20 transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
+                >
+                  <Wallet className="w-4 h-4" />
+                  {isConnecting ? 'Connecting...' : 'Connect Wallet'}
                 </button>
              )}
           </div>
-        </header>
+        </div>
+      </nav>
 
+      <main className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
         {!pubKey ? (
           <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
-            <h2 className="text-4xl font-extrabold mb-6">Decentralized Feedback System</h2>
-            <p className="text-gray-400 mb-8 max-w-xl text-lg">Leave immutable feedback on the Stellar blockchain. View what others have shared globally, and search by specific addresses.</p>
+            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-500/10 text-indigo-400 text-sm font-medium mb-8 border border-indigo-500/20">
+              <TrendingUp className="w-4 h-4" /> The Future of Financial Reputation
+            </div>
+            <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight mb-8">
+              Your Reputation <br/>
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-emerald-400">
+                Travels With You.
+              </span>
+            </h1>
+            <p className="text-lg md:text-xl text-slate-400 max-w-2xl mb-12 leading-relaxed">
+              Build a portable, decentralized Trust Score based on your real-world achievements. Access global financial services without relying on traditional credit bureaus.
+            </p>
             <button 
-              className="bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-4 rounded-full font-bold text-lg shadow-[0_0_20px_rgba(79,70,229,0.4)] transition-all transform hover:scale-105 flex items-center"
-              onClick={handleConnect} disabled={isConnecting}
+              onClick={handleConnect}
+              disabled={isConnecting}
+              className="group relative inline-flex items-center gap-3 bg-white text-slate-950 px-8 py-4 rounded-2xl text-lg font-bold transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
             >
-              {isConnecting ? 'Connecting...' : 'Connect Freighter Wallet'}
+              <Wallet className="w-5 h-5 group-hover:rotate-12 transition-transform" />
+              Start Building Trust
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
             
-            {/* Sidebar Overview */}
-            <div className="lg:col-span-1 space-y-6">
-               <div className="bg-gray-900/40 backdrop-blur-md rounded-2xl border border-gray-800 p-6 shadow-xl">
-                  <h3 className="text-gray-400 text-sm font-semibold mb-1 uppercase tracking-wider">Account Balance</h3>
-                  <div className="text-4xl font-bold mb-6 flex items-end">
-                      {parseFloat(balance).toFixed(2)} <span className="text-xl text-indigo-400 ml-2 mb-1">XLM</span>
-                  </div>
-                  
-                  <div className="bg-black/30 rounded-lg p-4 border border-gray-800 mb-4">
-                     <p className="text-xs text-gray-500 mb-1">Connected Address</p>
-                     <div className="flex items-center justify-between font-mono text-sm">
-                        <span className="truncate mr-2 text-gray-300">{pubKey.substring(0, 8)}...{pubKey.slice(-8)}</span>
-                        <div className="flex gap-2">
-                            <button onClick={handleCopy} className="text-gray-400 hover:text-white transition" title="Copy Address">
-                                {copied ? <CheckCircle className="w-5 h-5 text-green-400" /> : <Copy className="w-5 h-5" />}
-                            </button>
-                            <button onClick={() => setShowQr(!showQr)} className="text-gray-400 hover:text-white transition" title="Show QR Code">
-                                <QrCode className="w-5 h-5" />
-                            </button>
-                        </div>
-                     </div>
-                  </div>
-
-                  {showQr && (
-                    <div className="bg-white p-4 rounded-xl flex justify-center mb-4 transition-all">
-                        <QRCodeSVG value={pubKey} size={150} />
-                    </div>
-                  )}
-
-                  <button 
-                     onClick={() => window.open(`https://friendbot.stellar.org/?addr=${pubKey}`, '_blank')}
-                     className="w-full text-center py-2 text-sm text-indigo-400 hover:text-indigo-300 border border-indigo-500/30 rounded-lg hover:bg-indigo-500/10 transition"
-                  >
-                     Fund from Friendbot
-                  </button>
-               </div>
+            {/* Sidebar Navigation */}
+            <div className="lg:col-span-3">
+              <div className="bg-slate-900/50 backdrop-blur-md rounded-2xl border border-slate-800 p-2 flex lg:flex-col gap-2">
+                <button 
+                  onClick={() => setActiveTab('user')}
+                  className={`flex-1 lg:w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
+                    activeTab === 'user' ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'
+                  }`}
+                >
+                  <Award className="w-5 h-5" /> My Trust Score
+                </button>
+                <button 
+                  onClick={() => setActiveTab('org')}
+                  className={`flex-1 lg:w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
+                    activeTab === 'org' ? 'bg-emerald-600/10 text-emerald-400 border border-emerald-500/20' : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'
+                  }`}
+                >
+                  <Building className="w-5 h-5" /> Organization Portal
+                </button>
+              </div>
             </div>
 
-            {/* Main Action Area */}
-            <div className="lg:col-span-2">
-               <div className="bg-gray-900/40 backdrop-blur-md rounded-2xl border border-gray-800 shadow-xl overflow-hidden">
-                  <div className="flex border-b border-gray-800">
-                     <button 
-                        className={`flex-1 py-4 text-center font-medium transition-colors ${activeTab === 'submit' ? 'bg-indigo-600/10 text-indigo-400 border-b-2 border-indigo-500' : 'text-gray-400 hover:bg-gray-800/50'}`}
-                        onClick={() => setActiveTab('submit')}
-                     >
-                        <Send className="w-4 h-4 inline-block mr-2 -mt-1" />
-                        Submit
-                     </button>
-                     <button 
-                        className={`flex-1 py-4 text-center font-medium transition-colors ${activeTab === 'search' ? 'bg-blue-600/10 text-blue-400 border-b-2 border-blue-500' : 'text-gray-400 hover:bg-gray-800/50'}`}
-                        onClick={() => setActiveTab('search')}
-                     >
-                        <Search className="w-4 h-4 inline-block mr-2 -mt-1" />
-                        Search
-                     </button>
-                     <button 
-                        className={`flex-1 py-4 text-center font-medium transition-colors ${activeTab === 'global' ? 'bg-purple-600/10 text-purple-400 border-b-2 border-purple-500' : 'text-gray-400 hover:bg-gray-800/50'}`}
-                        onClick={() => setActiveTab('global')}
-                     >
-                        <Users className="w-4 h-4 inline-block mr-2 -mt-1" />
-                        Global
-                     </button>
+            {/* Main Content Area */}
+            <div className="lg:col-span-9">
+              {activeTab === 'user' && (
+                <div className="space-y-6">
+                  {/* Score Dashboard */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="bg-gradient-to-br from-indigo-900/40 to-slate-900/40 backdrop-blur-xl border border-indigo-500/20 rounded-3xl p-8 relative overflow-hidden">
+                      <div className="absolute top-0 right-0 p-8 opacity-20 pointer-events-none">
+                        <Shield className="w-32 h-32 text-indigo-400" />
+                      </div>
+                      <h3 className="text-indigo-400 text-sm font-bold tracking-widest uppercase mb-4">Global Trust Score</h3>
+                      {isFetchingData ? (
+                        <div className="animate-pulse flex items-baseline gap-2">
+                          <div className="h-16 w-32 bg-slate-800 rounded-lg"></div>
+                        </div>
+                      ) : (
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-6xl font-black text-white">{trustScore}</span>
+                          <span className="text-xl text-slate-400">/ 1000</span>
+                        </div>
+                      )}
+                      <p className="text-slate-400 mt-6 max-w-[200px] text-sm">
+                        Based on {credentials.length} verified credentials on Stellar.
+                      </p>
+                    </div>
+
+                    {/* Loan Eligibility Simulator */}
+                    <div className="bg-slate-900/50 backdrop-blur-xl border border-slate-800 rounded-3xl p-8 flex flex-col justify-between">
+                      <div>
+                        <h3 className="text-slate-300 font-semibold mb-4 flex items-center gap-2">
+                          <TrendingUp className="w-5 h-5 text-emerald-400" />
+                          Loan Eligibility Check
+                        </h3>
+                        <div className="flex gap-4 mb-6">
+                          <div className="flex-1 relative">
+                            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">$</span>
+                            <input 
+                              type="number" 
+                              value={loanAmount}
+                              onChange={(e) => setLoanAmount(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-700 rounded-xl py-3 pl-8 pr-4 text-white focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 outline-none transition-all"
+                            />
+                          </div>
+                          <button 
+                            onClick={checkLoanEligibility}
+                            className="bg-slate-800 hover:bg-slate-700 px-6 py-3 rounded-xl font-semibold transition-colors"
+                          >
+                            Check
+                          </button>
+                        </div>
+                      </div>
+                      
+                      {isEligible !== null && (
+                        <div className={`p-4 rounded-xl border flex items-start gap-3 ${isEligible ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400'}`}>
+                          {isEligible ? <CheckCircle className="w-5 h-5 mt-0.5" /> : <AlertCircle className="w-5 h-5 mt-0.5" />}
+                          <div>
+                            <p className="font-semibold">{isEligible ? 'Eligible for Loan' : 'Not Eligible Yet'}</p>
+                            <p className="text-sm opacity-80 mt-1">
+                              {isEligible ? 'Your Trust Score meets the requirement.' : 'Build your Trust Score with more credentials to unlock this loan amount.'}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="p-6">
-                     {activeTab === 'submit' && (
-                        <div className="space-y-6">
-                            <div className="flex justify-between items-center bg-indigo-900/20 p-4 rounded-lg border border-indigo-800/50">
-                                <span className="text-indigo-200 text-sm">Submit your message on the Stellar blockchain. It will be permanently recorded.</span>
-                            </div>
-
+                  {/* Credentials List */}
+                  <div className="bg-slate-900/50 backdrop-blur-xl border border-slate-800 rounded-3xl p-8">
+                    <h3 className="text-xl font-bold mb-6">Verified Credentials</h3>
+                    
+                    {credentials.length === 0 ? (
+                      <div className="text-center py-12 border-2 border-dashed border-slate-800 rounded-2xl">
+                        <Award className="w-12 h-12 text-slate-700 mx-auto mb-3" />
+                        <p className="text-slate-400">No credentials yet.</p>
+                        <p className="text-sm text-slate-500 mt-1">Head to the Organization Portal to issue a mock credential.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {credentials.map((cred, i) => (
+                          <div key={i} className="group bg-slate-950/50 border border-slate-800 p-5 rounded-2xl hover:border-indigo-500/30 transition-colors flex items-start justify-between">
                             <div>
-                                <label className="block text-sm text-gray-400 mb-2">Your Feedback (Max 28 chars)</label>
-                                <textarea 
-                                  className="w-full bg-black/40 border border-gray-700 rounded-lg p-4 text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 resize-none h-24"
-                                  placeholder="E.g., Great dApp experience!"
-                                  value={feedbackText} 
-                                  onChange={(e) => setFeedbackText(e.target.value)}
-                                  maxLength={28}
-                                />
-                                <div className="text-right text-xs text-gray-500 mt-1">
-                                    {feedbackText.length}/28
-                                </div>
+                              <h4 className="font-semibold text-lg text-slate-200">{cred.description}</h4>
+                              <p className="text-sm text-slate-500 font-mono mt-2 flex items-center gap-2">
+                                <Building className="w-4 h-4" /> Issued by: {cred.org.substring(0,6)}...{cred.org.slice(-4)}
+                              </p>
                             </div>
-
-                            {txError && (
-                                <div className="p-4 bg-red-900/30 border border-red-500/50 rounded-lg flex items-start text-red-200">
-                                    <AlertCircle className="w-5 h-5 mr-2 shrink-0 mt-0.5" />
-                                    <span>{txError}</span>
-                                </div>
-                            )}
-
-                            {submitStatus && !txError && (
-                                <div className="p-4 bg-blue-900/30 border border-blue-500/50 rounded-lg flex items-center text-blue-200">
-                                    {isSubmitting && <Loader />}
-                                    <span className={isSubmitting ? "ml-3" : ""}>{submitStatus}</span>
-                                </div>
-                            )}
-
-                            <button 
-                               className={`w-full py-4 rounded-xl font-bold text-lg shadow-lg transition-all flex justify-center items-center ${isSubmitting ? 'bg-indigo-800 text-gray-300 cursor-wait' : 'bg-indigo-600 hover:bg-indigo-500 text-white'}`}
-                               onClick={handleSubmitFeedback}
-                               disabled={isSubmitting || !feedbackText}
-                            >
-                               {isSubmitting ? 'Processing...' : 'Record Feedback on Chain'}
-                            </button>
-                        </div>
-                     )}
-
-                     {activeTab === 'search' && (
-                        <div className="space-y-6">
-                            <div className="flex gap-3">
-                                <input 
-                                  type="text" 
-                                  placeholder="Enter Stellar Public Key (G...)" 
-                                  className="flex-1 bg-black/40 border border-gray-700 rounded-lg p-3 text-white focus:outline-none focus:border-blue-500 font-mono text-sm"
-                                  value={searchAddress}
-                                  onChange={(e) => setSearchAddress(e.target.value)}
-                                />
-                                <button 
-                                  onClick={handleSearch}
-                                  disabled={isSearching || !searchAddress}
-                                  className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-lg font-semibold transition disabled:opacity-50"
-                                >
-                                  {isSearching ? <Loader /> : 'Search'}
-                                </button>
+                            <div className="flex flex-col items-end">
+                              <span className="text-2xl font-bold text-emerald-400">+{cred.score_value}</span>
+                              <span className="text-xs text-slate-500 mt-1">{cred.date}</span>
                             </div>
-
-                            <div className="mt-6 max-h-[400px] overflow-y-auto pr-2">
-                                {searchResults.length === 0 && !isSearching && searchAddress && (
-                                    <div className="text-center py-10 text-gray-500">
-                                        No feedback found for this address.
-                                    </div>
-                                )}
-                                {searchResults.map(fb => <FeedbackCard key={fb.id} fb={fb} />)}
-                            </div>
-                        </div>
-                     )}
-
-                     {activeTab === 'global' && (
-                        <div className="space-y-4">
-                            <div className="flex justify-between items-center mb-4">
-                                <h3 className="text-lg font-semibold text-gray-200">Recent Global Contributors</h3>
-                                <button onClick={() => fetchGlobalFeedbacks(true)} className="text-xs text-purple-400 hover:text-purple-300">
-                                    Refresh
-                                </button>
-                            </div>
-                            
-                            {isFetchingGlobal ? (
-                                <div className="py-10 flex justify-center"><Loader /></div>
-                            ) : (
-                                <div className="max-h-[500px] overflow-y-auto pr-2">
-                                    {globalFeedbacks.length === 0 ? (
-                                        <div className="text-center py-10 text-gray-500">No global feedback yet.</div>
-                                    ) : (
-                                        globalFeedbacks.map(fb => <FeedbackCard key={fb.id} fb={fb} />)
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                     )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-               </div>
+                </div>
+              )}
+
+              {activeTab === 'org' && (
+                <div className="bg-slate-900/50 backdrop-blur-xl border border-slate-800 rounded-3xl p-8 max-w-2xl mx-auto">
+                  <div className="flex items-center gap-4 mb-8 border-b border-slate-800 pb-6">
+                    <div className="w-12 h-12 rounded-full bg-emerald-500/10 flex items-center justify-center">
+                      <Building className="w-6 h-6 text-emerald-400" />
+                    </div>
+                    <div>
+                      <h2 className="text-2xl font-bold">Issue Credential</h2>
+                      <p className="text-slate-400 text-sm">Mint a verified achievement on the Stellar blockchain.</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-5">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-400 mb-2">Recipient Public Key</label>
+                      <input 
+                        type="text" 
+                        value={recipientAddress}
+                        onChange={(e) => setRecipientAddress(e.target.value)}
+                        placeholder="G..."
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 outline-none font-mono text-sm"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-slate-400 mb-2">Achievement Description</label>
+                      <input 
+                        type="text" 
+                        value={credentialDesc}
+                        onChange={(e) => setCredentialDesc(e.target.value)}
+                        placeholder="e.g. Completed 10 Freelance Projects"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-400 mb-2">Trust Score Value</label>
+                      <input 
+                        type="number" 
+                        value={scoreValue}
+                        onChange={(e) => setScoreValue(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 outline-none"
+                      />
+                    </div>
+
+                    {issueStatus && (
+                      <div className="p-4 rounded-xl bg-slate-800/50 border border-slate-700 text-emerald-400 text-sm flex items-center gap-3">
+                        {isIssuing && <Loader2 className="w-4 h-4 animate-spin" />}
+                        {issueStatus}
+                      </div>
+                    )}
+
+                    <button 
+                      onClick={handleIssueCredential}
+                      disabled={isIssuing || !recipientAddress || !credentialDesc}
+                      className="w-full mt-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold py-4 rounded-xl shadow-lg shadow-emerald-500/20 transition-all active:scale-95 flex items-center justify-center gap-2"
+                    >
+                      {isIssuing ? 'Processing...' : 'Mint Credential on Stellar'}
+                    </button>
+                    
+                    <p className="text-xs text-center text-slate-500 mt-4">
+                      For demo purposes, you can issue a credential to your own connected address to see your score increase.
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
-      </div>
+      </main>
     </div>
   );
 }
